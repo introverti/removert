@@ -1,0 +1,54 @@
+1. parse parameters
+2.         // pcdown
+        pcl::VoxelGrid<PointType> downsize_filter;
+        downsize_filter.setLeafSize(kDownsampleVoxelSize, kDownsampleVoxelSize,
+                                    kDownsampleVoxelSize);
+        downsize_filter.setInputCloud(points);
+
+        pcl::PointCloud<PointType>::Ptr downsampled_points(
+            new pcl::PointCloud<PointType>);
+        downsize_filter.filter(*downsampled_points);
+3. makeGlobalMap() -> mergeScansWithinGlobalCoord(scans_, scan_poses_, map_global_orig_) -> octreeDownsampling(map_global_orig_, map_global_curr_) ++ save(Optional)
+
+4. (Optional)     // make tree (for fast ball search for the projection to make a map range
+    // image later) if(kUseSubsetMapCloud) // NOT recommend to use for under 5
+    // million points map input
+    //     kdtree_map_global_curr_->setInputCloud(map_global_curr_);
+
+5. removeOnce
+    # @ Range image resolution
+  # the below is actually magnifier ratio (i.e., 5 means x5 resolution, the x1 means 1 deg x 1 deg per pixel)
+  # - recommend to use the first removing resolution's magnifier ratio should meet the seonsor vertical fov / number of rays 
+  #     - e.g., HDL 64E of KITTI dataset -> appx 25 deg / 64 ray ~ 0.4 deg per pixel -> the magnifier ratio = 1/0.4 = 2.5
+  #     - e.g., Ouster OS1-64 of MulRan dataset -> appx 45 deg / 64 ray ~ 0.7 deg per pixel -> the magnifier ratio = 1/0.7 = 1.4
+  # - recommend to use the first reverting resolution's magnifier ratio should lied in 1.0 to 1.5
+  # remove_resolution_list: [2.5, 2.0, 1.5] # for HDL 64E of KITTI dataset 
+  remove_resolution_list: [1.4, 1.1] # for Ouster OS1-64 of MulRan dataset
+  revert_resolution_list: [1.0, 0.9, 0.8, 0.7] # TODO
+
+6.revertOnce
+    https://github.com/irapkaist/removert
+    void Removerter::revertOnce( const Session& _target_sess, const Session& _source_sess, float _res_alpha )
+{
+    pcl::PointCloud<PointType>::Ptr map_global_curr = _target_sess.map_global_curr_;
+    pcl::PointCloud<PointType>::Ptr map_global_curr_static = _target_sess.map_global_curr_static_;
+    pcl::PointCloud<PointType>::Ptr map_global_curr_dynamic = _target_sess.map_global_curr_dynamic_;
+
+    ROS_INFO_STREAM("\033[1;32m" << "\nSelf-reverting starts \033[0m");
+    auto [map_global_curr_static_this_turn, map_global_curr_dynamic_this_turn] 
+        = partitionCurrentMap( _target_sess, _source_sess, _res_alpha ); 
+
+    // Update the current map and reset the tree
+    map_global_curr_dynamic->clear();
+    *map_global_curr_dynamic = *map_global_curr_dynamic_this_turn; // update
+    octreeDownsampling(map_global_curr_dynamic, map_global_curr_dynamic, 0.05);
+    ROS_INFO_STREAM("\033[1;32m Current Dynamic pointcloud have: " << map_global_curr_dynamic->points.size() << " points.\033[0m");
+
+    map_global_curr->clear();
+    *map_global_curr = *map_global_curr_dynamic; // update
+
+    *map_global_curr_static += *map_global_curr_static_this_turn; // append (i.e., revert)
+    octreeDownsampling(map_global_curr_static, map_global_curr_static, 0.05);
+    ROS_INFO_STREAM("\033[1;32m Current Static pointcloud have: " << map_global_curr_static->points.size() << " points.\033[0m");
+
+} // revertOnce

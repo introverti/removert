@@ -1,5 +1,11 @@
 # *Removert*
 
+## Note of Xavier
+- Limited performance due to only front-view lidar and long range data. 
+- Since our data-collection car only passed through one scene once, relative dynamic objects are hardly removed in each scan. 
+- When selecting local sub-map, a precision detection range of lidar is required.
+- Flyback mode is needed, while currently we have not enabled it, so different depth map are calculated odd or unoder frames.
+
 ## What is removert?
 - Static map construction in the wild. 
 - A dynamic points removing tool by constructing a static map
