@@ -121,9 +121,8 @@ void Removerter::parseValidScanInfo(void) {
 void Removerter::readValidScans(void) {
     // No-flyback model
     for (size_t i = start_id_; i < end_id_; i += 2) {
-        pcl::PointCloud<PointType>::Ptr raw_points(
-            new pcl::PointCloud<PointType>);
-        pcl::io::loadPCDFile<PointType>(sequence_scan_paths_[i], *raw_points);
+        pcl::PointCloud<PointA>::Ptr raw_points(new pcl::PointCloud<PointA>);
+        pcl::io::loadPCDFile<PointA>(sequence_scan_paths_[i], *raw_points);
         pcl::PointCloud<PointType>::Ptr points(new pcl::PointCloud<PointType>);
         for (auto& point : raw_points->points) {
             float curr_range =
@@ -134,29 +133,32 @@ void Removerter::readValidScans(void) {
                 points->emplace_back(temp);
             }
         }
-        // pcdown
-        pcl::VoxelGrid<PointType> downsize_filter;
-        downsize_filter.setLeafSize(kDownsampleVoxelSize, kDownsampleVoxelSize,
-                                    kDownsampleVoxelSize);
-        downsize_filter.setInputCloud(points);
+        // ignore
+        // // pcdown
+        // pcl::VoxelGrid<PointType> downsize_filter;
+        // downsize_filter.setLeafSize(kDownsampleVoxelSize,
+        // kDownsampleVoxelSize,
+        //                             kDownsampleVoxelSize);
+        // downsize_filter.setInputCloud(points);
 
-        pcl::PointCloud<PointType>::Ptr downsampled_points(
-            new pcl::PointCloud<PointType>);
-        downsize_filter.filter(*downsampled_points);
+        // pcl::PointCloud<PointType>::Ptr downsampled_points(
+        //     new pcl::PointCloud<PointType>);
+        // downsize_filter.filter(*downsampled_points);
 
         // save downsampled pointcloud
-        scans_.emplace_back(downsampled_points);
+        scans_.emplace_back(points);
         poses_.emplace_back(sequence_scan_poses_[i]);
         inverse_poses_.emplace_back(sequence_scan_inverse_poses_[i]);
         sequence_valid_scan_names_.emplace_back(sequence_scan_names_[i]);
         sequence_valid_scan_paths_.emplace_back(sequence_scan_paths_[i]);
 
-        // Debug
-        inno_log_info(
-            "Pointcloud size: %zu, downsample size: %zu, current scans size: "
-            "%zu",
-            points->points.size(), downsampled_points->points.size(),
-            scans_.size());
+        // // Debug
+        // inno_log_info(
+        //     "Pointcloud size: %zu, downsample size: %zu, current scans size:
+        //     "
+        //     "%zu",
+        //     points->points.size(), downsampled_points->points.size(),
+        //     scans_.size());
     }
 }  // readValidScans
 
@@ -170,13 +172,20 @@ void Removerter::makeGlobalMap(void) {
     inno_log_info("Downsampling leaf size: %f", kDownsampleVoxelSize);
     // remove repeated (redundant) points
     // - using OctreePointCloudVoxelCentroid for large-size downsampling
-    octreeDownsampling(map_global_orig_, map_global_curr_);
+    pcl::PointCloud<PointType>::Ptr map_voxel_temp(
+        new pcl::PointCloud<PointType>());
+    voxelDownsampling(map_global_orig_, map_voxel_temp);
+    octreeDownsampling(map_voxel_temp, map_global_curr_);
+
     // save the original cloud
     if (kFlagSaveMapPointcloud) {
         // in global coord
         std::string static_global_file_name =
             save_pcd_directory_ + "OriginalNoisyMapGlobal.pcd";
+        std::string static_voxel_file_name =
+            save_pcd_directory_ + "VoxelMapGlobal.pcd";
         pcl::io::savePCDFileBinary(static_global_file_name, *map_global_curr_);
+        pcl::io::savePCDFileBinary(static_voxel_file_name, *map_voxel_temp);
         inno_log_info("The original pointcloud is saved (global coord): %s",
                       static_global_file_name.c_str());
     }
@@ -186,6 +195,111 @@ void Removerter::makeGlobalMap(void) {
         kdtree_map_global_curr_->setInputCloud(map_global_curr_);
     }
 }  // makeGlobalMap
+
+void Removerter::voxelDownsampling(const pcl::PointCloud<PointType>::Ptr& _src,
+                                   pcl::PointCloud<PointType>::Ptr& _to_save) {
+    double submap_resolution = 20;
+
+    double minX, minY, minZ, maxX, maxY, maxZ;
+    PointType min_pt;
+    PointType max_pt;
+    pcl::getMinMax3D(*_src, min_pt, max_pt);
+    float minValue = std::numeric_limits<float>::epsilon() * 512.0f;
+    minX = min_pt.x;
+    minY = min_pt.y;
+    minZ = min_pt.z;
+    maxX = max_pt.x + minValue;
+    maxY = max_pt.y + minValue;
+    maxZ = max_pt.z + minValue;
+    inno_log_info("X Y Z [%f, %f] [%f, %f] [%f, %f]", minX, maxX, minY, maxY,
+                  minZ, maxZ);
+
+    int sx, sy, sz;
+    sx = std::ceil((maxX - minX) / submap_resolution)+1;
+    sy = std::ceil((maxY - minY) / submap_resolution)+1;
+    sz = std::ceil((maxZ - minZ) / submap_resolution)+1;
+    int total_submap = sx * sy * sz;
+    inno_log_info("%u %u %u", sx, sy, sz);
+    inno_log_info("%u", total_submap);
+
+    std::vector<pcl::PointCloud<PointType>::Ptr> submaps;
+    for (int i = 0;i < total_submap; ++i) {
+        pcl::PointCloud<PointType>::Ptr temp(new pcl::PointCloud<PointType>);
+        submaps.emplace_back(temp);
+    }
+    inno_log_info("submaps size %zu", submaps.size());
+    inno_log_info("submap init point size %zu", submaps[0]->size());
+
+    for (auto& point : _src->points) {
+        int px, py, pz;
+        px = std::round((point.x - minX) / submap_resolution);
+        py = std::round((point.y - minY) / submap_resolution);
+        pz = std::round((point.z - minZ) / submap_resolution);
+        int pid = pz * sy * sx + py * sx + px;
+        submaps[pid]->push_back(point);
+    }
+    inno_log_info("submap done");
+
+    // Killed lol
+    // std::unordered_map<size_t, std::vector<size_t>> voxelID_pointID;
+    // std::vector<Eigen::MatrixXi> voxel_flag(rx, Eigen::MatrixXi(ry,rz));
+    for (auto& pc : submaps) {
+        if (pc->size()) {
+            submap_voxelDownsampling(pc, _to_save);
+        }
+    }
+}
+void Removerter::submap_voxelDownsampling(
+    const pcl::PointCloud<PointType>::Ptr& _src,
+    pcl::PointCloud<PointType>::Ptr& _to_save) {
+    double voxel_resolution = 0.02;
+    size_t min_voxel_point_number = 2;
+    double minX, minY, minZ, maxX, maxY, maxZ;
+    PointType min_pt;
+    PointType max_pt;
+    pcl::getMinMax3D(*_src, min_pt, max_pt);
+    float minValue = std::numeric_limits<float>::epsilon() * 512.0f;
+    minX = min_pt.x;
+    minY = min_pt.y;
+    minZ = min_pt.z;
+    maxX = max_pt.x + minValue;
+    maxY = max_pt.y + minValue;
+    maxZ = max_pt.z + minValue;
+    inno_log_info("sub map X Y Z [%f, %f] [%f, %f] [%f, %f]", minX, maxX, minY, maxY,
+                  minZ, maxZ);
+
+    int rx, ry, rz;
+    rx = std::ceil((maxX - minX) / voxel_resolution)+1;
+    ry = std::ceil((maxY - minY) / voxel_resolution)+1;
+    rz = std::ceil((maxZ - minZ) / voxel_resolution)+1;
+    int total_cell = rx * ry * rz;
+
+    std::unordered_map<int, std::vector<size_t>> voxelID_pointID;
+    for (size_t i = 0; i < _src->size(); ++i) {
+        auto point = _src->points[i];
+        int tx = std::round((point.x - minX) / voxel_resolution);
+        int ty = std::round((point.y - minY) / voxel_resolution);
+        int tz = std::round((point.z - minZ) / voxel_resolution);
+        int id = tz * ry * rx + ty * rx + tx;
+        if (auto iter = voxelID_pointID.find(id);
+            iter != voxelID_pointID.end()) {
+            iter->second.emplace_back(i);
+        } else {
+            voxelID_pointID.insert({id, {i}});
+        }
+    }
+    inno_log_info("%u %u %u", rx, ry, rz);
+    inno_log_info("%u", total_cell);
+    inno_log_info("Static Done %zu", voxelID_pointID.size());
+
+    for (auto& pair : voxelID_pointID) {
+        if (pair.second.size() >= min_voxel_point_number) {
+            for (auto& index : pair.second) {
+                _to_save->push_back(_src->points[index]);
+            }
+        }
+    }
+}
 
 void Removerter::mergeScansWithinGlobalCoord(
     const std::vector<pcl::PointCloud<PointType>::Ptr>& _scans,
@@ -236,7 +350,7 @@ void Removerter::removeOnce(float _res_alpha) {
     float deg_per_pixel = 1.0 / _res_alpha;
     inno_log_info("Removing starts with resolution: x %f(%fdeg/pixel",
                   _res_alpha, deg_per_pixel);
-    inno_log_info("The range image size is: [%i, %i]", rimg_shape.first,
+    inno_log_info("The range image size is: [%u, %u]", rimg_shape.first,
                   rimg_shape.second);
     inno_log_info("The number of map points: %zu",
                   map_global_curr_->points.size());
@@ -750,7 +864,7 @@ std::vector<int> Removerter::getGlobalMapStaticIdxFromDynamicIdx(
 //     float deg_per_pixel = 1.0 / _res_alpha;
 //     inno_log_info("Reverting starts with resolution: x %f(%fdeg/pixel",
 //                   _res_alpha, deg_per_pixel);
-//     inno_log_info("The range image size is: [%i, %i]", rimg_shape.first,
+//     inno_log_info("The range image size is: [%u, %u]", rimg_shape.first,
 //                   rimg_shape.second);
 //     inno_log_info("The number of map points: %zu",
 //                   map_global_curr_->points.size());
@@ -877,7 +991,7 @@ void Removerter::saveStaticScan(
     std::string file_name_orig = sequence_valid_scan_names_.at(_scan_idx);
     std::string file_name =
         scan_static_save_dir_ + "/" + file_name_orig + ".pcd";
-    inno_log_info("Scan %i 's static points is saved %s", _scan_idx,
+    inno_log_info("Scan %u 's static points is saved %s", _scan_idx,
                   file_name.c_str());
     pcl::io::savePCDFileBinary(file_name, *_ptcloud);
 }  // saveStaticScan
@@ -887,7 +1001,7 @@ void Removerter::saveDynamicScan(
     std::string file_name_orig = sequence_valid_scan_names_.at(_scan_idx);
     std::string file_name =
         scan_dynamic_save_dir_ + "/" + file_name_orig + ".pcd";
-    inno_log_info("Scan %i 's dynamic points is saved %s", _scan_idx,
+    inno_log_info("Scan %u 's dynamic points is saved %s", _scan_idx,
                   file_name.c_str());
     pcl::io::savePCDFileBinary(file_name, *_ptcloud);
 }  // saveDynamicScan
@@ -1020,8 +1134,8 @@ void Removerter::run(void) {
 
     // map-side removals
     for (float _rm_res : remove_resolution_list_) {
-        removeOnce(_rm_res);
-        saveCurrentStaticAndDynamicPointCloudGlobal();
+        // removeOnce(_rm_res);
+        // saveCurrentStaticAndDynamicPointCloudGlobal();
         // saveCurrentStaticAndDynamicPointCloudLocal(base_node_idx_);
     }
 

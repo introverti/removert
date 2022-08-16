@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "logger.h"
+#include "point_type.h"
 
 using std::cout;
 using std::endl;
@@ -46,7 +47,7 @@ class Removerter {
                                               // this value, less static
                                               // structure will be removed at
                                               // the scan-side removal stage)
-    float kDownsampleVoxelSize = 0.1;
+    float kDownsampleVoxelSize = 0.02;
     bool kFlagSaveMapPointcloud = true;
     bool kFlagSaveCleanScans = true;
 
@@ -89,8 +90,8 @@ class Removerter {
     pcl::KdTreeFLANN<PointType>::Ptr kdtree_map_global_curr_;
     pcl::KdTreeFLANN<PointType>::Ptr kdtree_scan_global_curr_;
     // Downsampled pointcloud
-    size_t start_id_ = 200;
-    size_t end_id_ = 800;
+    size_t start_id_ = 2000;
+    size_t end_id_ = 3000;
     std::vector<pcl::PointCloud<PointType>::Ptr> scans_;
     std::vector<Eigen::Matrix4d> poses_;
     std::vector<Eigen::Matrix4d> inverse_poses_;
@@ -131,6 +132,10 @@ class Removerter {
         const std::vector<Eigen::Matrix4d>& _scans_poses,
         pcl::PointCloud<PointType>::Ptr& _ptcloud_to_save);
     void octreeDownsampling(const pcl::PointCloud<PointType>::Ptr& _src,
+                            pcl::PointCloud<PointType>::Ptr& _to_save);
+    void voxelDownsampling(const pcl::PointCloud<PointType>::Ptr& _src,
+                            pcl::PointCloud<PointType>::Ptr& _to_save);
+    void submap_voxelDownsampling(const pcl::PointCloud<PointType>::Ptr& _src,
                             pcl::PointCloud<PointType>::Ptr& _to_save);
 
     void transformGlobalMapToLocal(int _base_scan_idx);
